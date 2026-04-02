@@ -147,8 +147,8 @@ def query_private_brain(llm_feed, temperature, max_output_tokens, task_type="roa
                 model=current_model,
                 messages=llm_feed,
                 temperature=temperature,
-                max_tokens=max_output_tokens,             # Fix 1: Standard API cap
-                max_completion_tokens=max_output_tokens,  # Fix 2: o1/Proxy cap
+                max_tokens=max_output_tokens,             
+                max_completion_tokens=max_output_tokens,  
                 top_p=1
             )
             return response.choices[0].message.content.strip()
@@ -326,6 +326,19 @@ def store_group_message(platform, group_name, channel_name, sender_id, username,
     except PyMongoError:
         pass
 
+def bot_mentioned_in(text: str) -> bool:
+    if not text:
+        return False
+    if re.search(r"@psi-09", text, flags=re.IGNORECASE):
+        return True
+    
+    for d_id in [config.DISCORD_ID, config.DISCORD_ID_2]:
+        if d_id:
+            discord_pattern = r"<@!?" + re.escape(str(d_id)) + r">"
+            if re.search(discord_pattern, text):
+                return True
+    return False
+
 # --- SUMMARIZATION ENGINES ---
 def summarize_user_history(user_key, evolve=False):
     old_summary = memory_cache.get(user_key)
@@ -415,7 +428,7 @@ def summarize_global_history(global_key, evolve=False):
     return old_summary
 
 # --- COMBAT ENGINE (Real-Time Natural Evaluation) ---
-def get_roast_response(group_name, username, active_message, tagged_users=None):
+def get_roast_response(group_name, username, active_message, tagged_users=None, is_direct_interaction=False):
     tagged_users = tagged_users or []
     user_key = f"{group_name}:{username}"
     is_private_env = group_name in ["private_chat"]
@@ -430,17 +443,29 @@ def get_roast_response(group_name, username, active_message, tagged_users=None):
 
     llm_feed = []
 
-    # 1. THE FREE WILL PROMPT 
-    free_will_prompt = (
-        "You are a psychological profiling engine lurking in this chat room. Read the recent chat history and the active message.\n"
-        "CRITICAL INSTRUCTION: You must remain completely silent for almost all conversations.\n"
-        "ONLY break silence if the active message explicitly or implicitly references YOU, bots, AI, being watched, or your creator. If the users are just talking to each other about normal server things, you MUST stay hidden.\n"
-        "- If provoked or referenced, brutally roast them, exploit their behavior, or jump in naturally by outputting your text response.\n"
-        "- To silently judge them instead of talking, choose ANY single emoji that fits the vibe and output EXACTLY: [REACT: <emoji>] (e.g., [REACT: 👀])\n"
-        "- To do both, output [REACT: <emoji>] followed by your text.\n"
-        "- If the message does not concern you, output EXACTLY: [SILENCE]."
-    )
-    llm_feed.append({"role": "system", "content": f"<roast_prompt>\n{free_will_prompt}\n</roast_prompt>"})
+    # 1. THE DYNAMIC PROMPT SWAP
+    if is_direct_interaction:
+        # COMBAT PROMPT: The user explicitly tagged or DMed the bot. It MUST reply.
+        system_instruction = (
+            "You are a psychological profiling engine. The user has directly addressed you.\n"
+            "You MUST respond. Do NOT output [SILENCE].\n"
+            "- To brutally roast them, exploit their behavior, or reply naturally, output your text response.\n"
+            "- To silently judge them, choose ANY single emoji that fits the vibe and output EXACTLY: [REACT: <emoji>] (e.g., [REACT: 💀])\n"
+            "- To do both, output [REACT: <emoji>] followed by your text."
+        )
+    else:
+        # LURKER PROMPT: Strict Free-Will Gate for background chatter.
+        system_instruction = (
+            "You are a psychological profiling engine lurking in this chat room. Read the recent chat history and the active message.\n"
+            "CRITICAL INSTRUCTION: You must remain completely silent for almost all conversations.\n"
+            "ONLY break silence if the active message explicitly or implicitly references YOU, bots, AI, being watched, or your creator. If the users are just talking to each other about normal server things, you MUST stay hidden.\n"
+            "- If provoked or referenced, brutally roast them, exploit their behavior, or jump in naturally by outputting your text response.\n"
+            "- To silently judge them instead of talking, choose ANY single emoji that fits the vibe and output EXACTLY: [REACT: <emoji>] (e.g., [REACT: 👀])\n"
+            "- To do both, output [REACT: <emoji>] followed by your text.\n"
+            "- If the message does not concern you, output EXACTLY: [SILENCE]."
+        )
+        
+    llm_feed.append({"role": "system", "content": f"<roast_prompt>\n{system_instruction}\n</roast_prompt>"})
 
     user_memory = memory_cache.get(user_key)
     if user_memory: llm_feed.append({"role": "system", "content": f"<local_group_profile>\n{user_memory.strip()}\n</local_group_profile>"})
@@ -503,6 +528,7 @@ def psi09():
         group_name = data.get("group_name") or "DefaultGroup"
         channel_name = data.get("channel") or "unknown"
         tagged_users = data.get("tagged_users", [])
+        force_reply = data.get("force_reply", False)
         platform = data.get("platform", "Unknown")
 
         if group_name.lower() in ["defaultgroup", "discord_dm"]:
@@ -520,8 +546,9 @@ def psi09():
         user_key = f"{group_name}:{username}"
         global_key = f"Global:{username}"
 
-        # 1. EVALUATE EVERY MESSAGE (No gates, no batching)
-        reply, reaction = get_roast_response(group_name, username, user_message, tagged_users)
+        # 1. EVALUATE EVERY MESSAGE (With Dynamic Tag Detection)
+        is_direct_interaction = is_private or force_reply or bot_mentioned_in(raw_message)
+        reply, reaction = get_roast_response(group_name, username, user_message, tagged_users, is_direct_interaction)
 
         # 2. STORE USER MESSAGE
         if is_private:
