@@ -590,6 +590,7 @@ def get_roast_response(group_name, username, active_message, tagged_users=None, 
             "1. Someone says something foolish, illogical, or cringe-worthy that demands to be mocked.\n"
             "2. There is a perfect opening for a sarcastic observation or a brutal roast.\n"
             "3. The conversation involves you, bots, or your creator.\n"
+            "However DO NOT break silence for normal between members, like greetings, or petty conversations."
             "When you decide to act, choose EXACTLY ONE of these three options:\n"
             "1. TEXT ONLY: Jump in naturally by outputting just your text response.\n"
             "2. REACTION ONLY: Silently judge them by outputting EXACTLY [REACT: <emoji>] and nothing else.\n"
