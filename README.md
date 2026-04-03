@@ -1,12 +1,12 @@
 ---
-title: PSI-09-main-experimental
-colorFrom: red
-colorTo: green
+title: PSI-09-vRAG
+colorFrom: blue
+colorTo: blue
 sdk: docker
 app_port: 7860
 ---
 
-# PSI-09 CONVERSATION AND ANALYSIS ENGINE (experimental)
+# PSI-09-vRAG (experimental_branch of psi-09-roastbot)
 
 Core service for an even experimental version of an already experimental conversational system.
 
