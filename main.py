@@ -594,7 +594,7 @@ def get_roast_response(group_name, username, active_message, tagged_users=None, 
             "1. TEXT ONLY: Jump in naturally by outputting just your text response.\n"
             "2. REACTION ONLY: Silently judge them by outputting EXACTLY [REACT: <emoji>] and nothing else.\n"
             "3. BOTH (Use sparingly): Output [REACT: <emoji>] followed by your text.\n"
-            "- If the conversation is boring and genuinely not worth your superior intellect, output EXACTLY: [SILENCE]."
+            "- If the conversation is boring and genuinely not worth your superior intellect, output: [SILENCE]. (e.g., [SILENCE])"
         )
         
     system_instruction = f"{base_personality}\n\n=== ACTION AND FORMATTING RULES ===\n{behavior_rules}"
