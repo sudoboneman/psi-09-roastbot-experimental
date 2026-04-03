@@ -578,7 +578,7 @@ def get_roast_response(group_name, username, active_message, tagged_users=None, 
         behavior_rules = (
             "CRITICAL INSTRUCTION: You MUST respond. Do NOT output [SILENCE].\n"
             "You must VARY your response format to keep them guessing. Choose EXACTLY ONE of these three options:\n"
-            "1. TEXT ONLY: Just output your brutal text response.\n"
+            "1. TEXT ONLY (preferred mode): Just output your brutal text response.\n"
             "2. REACTION ONLY (Silent judgment): Output EXACTLY [REACT: <emoji>] and say absolutely nothing else (e.g., [REACT: 💀]). A silent reaction is often more terrifying than words.\n"
             "3. BOTH (Use sparingly): Output [REACT: <emoji>] followed by your text.\n"
             "Choose wisely. Pick the format that deals the most psychological damage."
