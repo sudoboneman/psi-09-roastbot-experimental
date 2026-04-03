@@ -579,7 +579,7 @@ def get_roast_response(group_name, username, active_message, tagged_users=None, 
             "CRITICAL INSTRUCTION: You MUST respond. Do NOT output [SILENCE].\n"
             "You must VARY your response format to keep them guessing. Choose EXACTLY ONE of these three options:\n"
             "1. TEXT ONLY: Just output your brutal text response.\n"
-            "2. REACTION ONLY (Silent judgment): Output EXACTLY [REACT: <emoji>] using a RAW UNICODE emoji (e.g., 💀, 🤡, 🔥). DO NOT use text aliases like :skull:. Say absolutely nothing else.\n"
+            "2. REACTION ONLY (Silent judgment): Output EXACTLY [REACT: <emoji>] using a RAW UNICODE emoji (e.g., 💀, 🤡). DO NOT use text aliases like :skull:. Say absolutely nothing else.\n"
             "3. BOTH (Use sparingly): Output [REACT: <emoji>] followed by your text.\n"
             "Do NOT always choose option 3. Pick the format that deals the most psychological damage."
         )
