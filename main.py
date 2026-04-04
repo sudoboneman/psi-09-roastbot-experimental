@@ -40,13 +40,16 @@ class Config:
     
     ROAST_MODELS: list = __import__("dataclasses").field(default_factory=lambda: [
         "moonshotai/kimi-k2-instruct",
-        "moonshotai/kimi-k2-instruct-0905"
+        "moonshotai/kimi-k2-instruct-0905",
+        "openai/gpt-oss-120b"
     ])
     
     BACKGROUND_MODELS: list = __import__("dataclasses").field(default_factory=lambda: [
         "llama-3.3-70b-versatile",
         "meta-llama/llama-4-scout-17b-16e-instruct",
-        "openai/gpt-oss-120b"
+        "openai/gpt-oss-120b",
+        "moonshotai/kimi-k2-instruct",
+        "moonshotai/kimi-k2-instruct-0905"
     ])
     
     BOT_NUMBER: str = os.getenv("BOT_NUMBER")
@@ -65,7 +68,10 @@ config = Config()
 
 # --- DSPy CONFIGURATION (Combat Engine) ---
 # We configure DSPy to use your primary API key and model for the fast combat engine
-roast_lm = dspy.Groq(model=config.ROAST_MODELS[0], api_key=config.GROQ_API_KEY_1)
+roast_lm = dspy.LM(
+    model=f"groq/{config.ROAST_MODELS[0]}", 
+    api_key=config.GROQ_API_KEY_1
+)
 dspy.settings.configure(lm=roast_lm)
 
 class RoastSignature(dspy.Signature):
