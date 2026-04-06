@@ -45,11 +45,11 @@ class Config:
     ])
     
     BACKGROUND_MODELS: list = __import__("dataclasses").field(default_factory=lambda: [
+        "moonshotai/kimi-k2-instruct",
+        "moonshotai/kimi-k2-instruct-0905",
         "openai/gpt-oss-120b",
         "llama-3.3-70b-versatile",
-        "meta-llama/llama-4-scout-17b-16e-instruct",
-        "moonshotai/kimi-k2-instruct",
-        "moonshotai/kimi-k2-instruct-0905"
+        "meta-llama/llama-4-scout-17b-16e-instruct"
     ])
     
     BOT_NUMBER: str = os.getenv("BOT_NUMBER")
