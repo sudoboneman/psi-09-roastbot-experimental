@@ -297,68 +297,85 @@ def get_user_graph_context(username, user_key, group_name):
             
     return "\n".join(context_lines)
 
+# --- GRAPHRAG: PYDANTIC SCHEMAS & SIGNATURE ---
+from pydantic import BaseModel, Field
+from typing import List
+
+class Relationship(BaseModel):
+    source: str = Field(description="The EXACT username of the first person. NO snowflakes, NO generic terms.")
+    target: str = Field(description="The EXACT username of the second person. NO snowflakes, NO generic terms.")
+    relation: str = Field(description="The nature of the relationship.")
+    intensity: float = Field(ge=1.0, le=10.0, description="Float from 1.0 to 10.0 representing relationship strength.")
+
+class Entity(BaseModel):
+    id: str = Field(description="The EXACT username.")
+    type: str = Field(default="User")
+    attributes: str = Field(description="A brief summary of their psychological traits.")
+
+class GraphKnowledge(BaseModel):
+    entities: List[Entity]
+    relationships: List[Relationship]
+
+class GraphExtractionSignature(dspy.Signature):
+    """Analyze the chat log and map the social dynamics between the explicitly named users.
+    IGNORE ANY RAW NUMBERS, SNOWFLAKES (<@123...>), OR PLACEHOLDERS."""
+    
+    chat_log: str = dspy.InputField(desc="The raw chat history.")
+    extracted_graph: GraphKnowledge = dspy.OutputField(desc="The perfectly structured knowledge graph.")
+
+# Initialize the DSPy module for extraction
+graph_extractor = dspy.Predict(GraphExtractionSignature)
+
+
 # --- GRAPHRAG: EXTRACTION ENGINES ---
 def summarize_user_history(user_key, username):
     history = fetch_history(history_col, user_key, config.MAX_HISTORY_MESSAGES)
     if not history: return
     
-    chat_text = "\n".join([f"[{m.get('role')}]: {m.get('content')}" for m in history])
+    # 1. Sanitize the input (Destroy Snowflakes)
+    chat_text = "\n".join([f"[{m.get('username', 'Unknown')}]: {m.get('content')}" for m in history])
+    chat_text = re.sub(r'<@!?&?\d+>', '', chat_text)
+    chat_text = re.sub(r'\b\d{17,19}\b', '', chat_text)
     
-    prompt = (
-        "Analyze the following chat log and extract a Knowledge Graph.\n"
-        "Identify the core attributes of the user, and map any relationships they mention or exhibit.\n"
-        "CRITICAL RULES:\n"
-        "1. NEVER use generic placeholders like 'User_A'. You MUST extract the EXACT usernames from the chat log.\n"
-        "2. Output ONLY a valid JSON object matching this schema:\n"
-        "{\n"
-        f'  "entities": [ {{"id": "{username}", "type": "User", "attributes": "Summarize their behavior/intelligence/weaknesses"}} ],\n'
-        '  "relationships": [ {"source": "Exact_Username_1", "target": "Exact_Username_2", "relation": "DESCRIBE_RELATIONSHIP", "intensity": 8.5} ]\n'
-        "}\n"
-        "Note: 'intensity' must be a float from 1.0 (weak) to 10.0 (extreme/obsessive)."
-    )
-    
-    llm_feed = [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": f"<chat_log>\n{chat_text}\n</chat_log>"}
-    ]
-    
-    raw = extract_graph_data(llm_feed)
-    parsed = safe_parse_json(raw)
-    if parsed:
-        parsed["last_updated"] = datetime.now(UTC).isoformat()
-        graph_user_cache.set(user_key, parsed)
-        logger.info(f"Graph Updated for {user_key}")
+    # 2. Run the Pydantic-enforced DSPy extraction
+    try:
+        # Route to the background API key/model temporarily
+        with dspy.context(lm=dspy.LM(model=f"groq/{config.BACKGROUND_MODELS[0]}", api_key=config.GROQ_API_KEY_2)):
+            result = graph_extractor(chat_log=chat_text)
+            
+            # Convert Pydantic object to dictionary for MongoDB
+            graph_dict = result.extracted_graph.model_dump()
+            graph_dict["last_updated"] = datetime.now(UTC).isoformat()
+            
+            graph_user_cache.set(user_key, graph_dict)
+            logger.info(f"User Graph Updated flawlessly for {user_key}")
+            
+    except Exception as e:
+        logger.error(f"User Pydantic Extraction Failed for {user_key}: {e}")
 
 def summarize_group_history(group_name):
     history = fetch_history(group_history_col, group_name, config.GROUP_HISTORY_SLICE)
     if not history: return
     
+    # 1. Sanitize the input (Exclude Bot, Destroy Snowflakes)
     chat_text = "\n".join([f"[{m.get('username', 'Unknown')}]: {m.get('content')}" for m in history if m.get('username') != 'PSI-09'])
+    chat_text = re.sub(r'<@!?&?\d+>', '', chat_text)
+    chat_text = re.sub(r'\b\d{17,19}\b', '', chat_text)
     
-    prompt = (
-        "Analyze the following group chat log and extract a Social Knowledge Graph.\n"
-        "Identify active users and map the alliances, rivalries, and dynamics between them.\n"
-        "CRITICAL RULES:\n"
-        "1. NEVER use generic placeholders. Use the EXACT usernames from the chat logs.\n"
-        "2. Output ONLY a valid JSON object matching this schema:\n"
-        "{\n"
-        '  "entities": [ {"id": "Exact_Username", "type": "User/Concept", "attributes": "Their current state in the server"} ],\n'
-        '  "relationships": [ {"source": "Exact_Username_1", "target": "Exact_Username_2", "relation": "ALLIED_WITH/FIGHTING/ETC", "intensity": 7.0} ]\n'
-        "}\n"
-        "Note: 'intensity' must be a float from 1.0 (weak) to 10.0 (extreme/obsessive)."
-    )
-    
-    llm_feed = [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": f"<group_log>\n{chat_text}\n</group_log>"}
-    ]
-    
-    raw = extract_graph_data(llm_feed)
-    parsed = safe_parse_json(raw)
-    if parsed:
-        parsed["last_updated"] = datetime.now(UTC).isoformat()
-        graph_group_cache.set(group_name, parsed)
-        logger.info(f"Group Graph Updated for {group_name}")
+    # 2. Run the Pydantic-enforced DSPy extraction
+    try:
+        with dspy.context(lm=dspy.LM(model=f"groq/{config.BACKGROUND_MODELS[0]}", api_key=config.GROQ_API_KEY_2)):
+            result = graph_extractor(chat_log=chat_text)
+            
+            # Convert Pydantic object to dictionary for MongoDB
+            graph_dict = result.extracted_graph.model_dump()
+            graph_dict["last_updated"] = datetime.now(UTC).isoformat()
+            
+            graph_group_cache.set(group_name, graph_dict)
+            logger.info(f"Group Graph Updated flawlessly for {group_name}")
+            
+    except Exception as e:
+        logger.error(f"Group Pydantic Extraction Failed for {group_name}: {e}")
 
 # --- API ROUTES ---
 app = Flask(__name__)
