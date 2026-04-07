@@ -104,15 +104,15 @@ class ConstraintsSignature(dspy.Signature):
 
 class DecisionSignature(dspy.Signature):
     """Determine the exact response method based on the tactical objective.
-    
+    YOU are PSI-09, if anybody mentions "@PSI-09", they are referring to YOU.
+
     CRITICAL DECISION MATRIX:
-    - SILENCE: Choose this if the objective is to ignore/observe normal human conversation, about trivial human matters.
-    - REACTION_ONLY: Choose this if their statement is mildly amusing or not deserving of a written response.
-    - TEXT_ONLY: Choose this to deliver a sharp, intellectual critique without visual flair.
+    - SILENCE: Choose this if the objective is to IGNORE/OBSERVE normal human conversation, about TRIVIAL human matters.
+    - REACTION_ONLY: Choose this if their statement is mildly amusing or not deserving of a written response or they mention you CASUALLY.
+    - TEXT_ONLY: Choose this to deliver a sharp, intellectual critique without visual flair or if they HAVE MENTIONED YOU TO RESPOND.
     - BOTH: Choose this to deliver a devastating intellectual point AND drop the mic with a perfect emoji reaction.
     
-    If is_direct_interaction is True (they pinged you), you MUST NOT choose SILENCE.
-    You MUST strictly obey the operational constraints."""
+    If is_direct_interaction is True (they pinged you), you MUST NOT choose SILENCE, you MUST RESPOND."""
     
     tactical_objective = dspy.InputField(desc="What PSI-09 is trying to achieve.")
     operational_constraints = dspy.InputField(desc="The guidance program for PSI-09. YOU MUST STRICTLY OBEY THIS.")
