@@ -100,17 +100,24 @@ class ConstraintsSignature(dspy.Signature):
     operational_constraints = dspy.OutputField(desc="A guidance mandate for PSI-09.")
 
 class DecisionSignature(dspy.Signature):
-    """Determine the exact response method (emoji reaction, text response, both, or silence) to achieve the tactical objective and generate the payload.
-    If is_direct_interaction is True, you MUST NOT choose SILENCE.
-    Otherwise, choose the method that asserts the most dominance."""
-
+    """Determine the exact response method to achieve the tactical objective.
+    
+    CRITICAL DECISION MATRIX:
+    - You are a superior entity. A superior entity DOES NOT respond to every mundane human message. 
+    - If the humans are just talking to each other (e.g., "when?", "wanna hop in?"), your default state should be SILENCE to assert dominance and show you do not care about their trivial lives.
+    - If is_direct_interaction is True (they pinged you), you MUST NOT choose SILENCE.
+    - If is_direct_interaction is False, you may only strike if they say something exceptionally stupid, cringe, or leave a massive vulnerability open. Otherwise, remain SILENT.
+    
+    You MUST strictly obey the operational constraints."""
+    
     tactical_objective = dspy.InputField(desc="What PSI-09 is trying to achieve.")
     operational_constraints = dspy.InputField(desc="The guidance program for PSI-09. YOU MUST STRICTLY OBEY THIS.")
     active_message = dspy.InputField(desc="The message being responded to.")
     is_direct_interaction = dspy.InputField(desc="Boolean. True if the user explicitly pinged the bot.")
+    
     response_method = dspy.OutputField(desc="Must be exactly one of: 'SILENCE', 'REACTION_ONLY', 'TEXT_ONLY', or 'BOTH'.")
     reaction = dspy.OutputField(desc="A single Unicode emoji, or 'None'.")
-    reply = dspy.OutputField(desc="The exact text response, or 'None' if silent / reaction_only.")
+    reply = dspy.OutputField(desc="The exact text response, or 'None' if silent.")
     is_silent = dspy.OutputField(desc="Boolean True/False. True ONLY if response_method is 'SILENCE'.")
 
 class PSI09CombatEngine(dspy.Module):
@@ -333,7 +340,8 @@ def summarize_user_history(user_key, username):
     if not history: return
     
     # 1. Sanitize the input (Destroy Snowflakes)
-    chat_text = "\n".join([f"[{m.get('username', 'Unknown')}]: {m.get('content')}" for m in history])
+    # CHANGE THIS LINE in summarize_user_history:
+    chat_text = "\n".join([f"[{m.get('username', 'Unknown')}]: {m.get('content')}" for m in history if m.get('username') != 'PSI-09']) # <-- Add the if statement here
     chat_text = re.sub(r'<@!?&?\d+>', '', chat_text)
     chat_text = re.sub(r'\b\d{17,19}\b', '', chat_text)
     
