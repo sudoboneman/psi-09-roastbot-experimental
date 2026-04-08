@@ -11,3 +11,4 @@ networkx
 dspy-ai
 discord.py
 aiohttp
+langgraph
