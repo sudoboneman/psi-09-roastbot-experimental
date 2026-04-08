@@ -177,7 +177,7 @@ class TriageSignature(dspy.Signature):
     decision: TriageDecision = dspy.OutputField(desc="Strict boolean routing decision.")
 # Use the 120b model for high-accuracy triage
 triage_lm = dspy.LM(model=f"groq/openai/gpt-oss-120b", api_key=config.GROQ_API_KEY_3)
-triage_engine = dspy.TypedPredictor(TriageSignature)
+triage_engine = dspy.Predict(TriageSignature) # <--- NATIVE PYDANTIC SUPPORT
 
 # Define the State dictionary that gets passed between nodes
 class CombatState(TypedDict):
