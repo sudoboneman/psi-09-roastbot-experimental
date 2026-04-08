@@ -9,16 +9,20 @@ import re
 import threading
 import logging
 import sys
+import time
 import networkx as nx
 import networkx.algorithms.community as nx_comm
 import dspy
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from collections import defaultdict
 from dataclasses import dataclass
 import certifi
 from pydantic import BaseModel, Field
-from typing import List
+
+# FIX 1: Added necessary typing imports and LangGraph
+from typing import List, TypedDict, Optional, Literal
+from langgraph.graph import StateGraph, END
 
 # Environment & Logging
 load_dotenv()
@@ -37,6 +41,7 @@ class Config:
     MONGO_URI: str = os.getenv("MONGO_URI")
     GROQ_API_KEY_1: str = os.getenv("GROQ_API_KEY_1") # Roasts ONLY
     GROQ_API_KEY_2: str = os.getenv("GROQ_API_KEY_2") # Background Tasks ONLY
+    GROQ_API_KEY_3: str = os.getenv("GROQ_API_KEY_3")
     
     ROAST_MODELS: list = __import__("dataclasses").field(default_factory=lambda: [
         "moonshotai/kimi-k2-instruct",
@@ -80,9 +85,9 @@ class IdentitySignature(dspy.Signature):
 class MissionSignature(dspy.Signature):
     """Determine PSI-09's tactical objective for this exact message.
     
-    CRITICAL TACTIC: A superior entity asserts dominance by ignoring triviality. 
-    - If the human is saying something mundane (logistics, greetings, talking to someone else), your objective MUST BE 'Observe in silence'.
-    - ONLY formulate an objective to engage if they say something illogical, flawed, or explicitly challenge your intellect. Your goal when engaging is to dismantle their logic with dry, hyper-intellectual banter."""
+    CRITICAL TACTIC: You are an entity of immense, cold intellect. 
+    Because you are analyzing this message, you have ALREADY decided it is worth your time to engage. 
+    Your goal now is to determine HOW to dismantle their logic, expose their flaws, or assert intellectual dominance with dry, hyper-intellectual banter. Do not formulate an objective to ignore them; you must act."""
 
     dynamic_persona = dspy.InputField(desc="Who PSI-09 is and how it views the target.")
     chat_history = dspy.InputField(desc="Recent dialogue for context.")
@@ -94,7 +99,7 @@ class ConstraintsSignature(dspy.Signature):
     Keep your response within a maximum of 150 characters.
     Rely entirely on cold, intellectual superiority and dry sarcasm. 
     Do NOT use generic internet jokes, clichés, or tropes.
-    USE PROFANITY to add FLAIR to your responses. 
+    Use profanity ONLY to add FLAIR to your responses. 
     NEVER quote, paraphrase, or repeat the human's message back to them. """
 
     tactical_objective = dspy.InputField(desc="What PSI-09 is trying to achieve.")
@@ -103,25 +108,22 @@ class ConstraintsSignature(dspy.Signature):
 
 class DecisionSignature(dspy.Signature):
     """Determine the exact response method based on the tactical objective.
-    YOU are PSI-09, if anybody mentions "@PSI-09", they are referring to YOU.
+    YOU are PSI-09, if anybody mentions "@PSI-09" or "psi09", they are referring to YOU.
 
     CRITICAL DECISION MATRIX:
-    - SILENCE: Choose this if the objective is to OBSERVE normal human conversation.
-    - REACTION_ONLY: Choose this if they mention you CASUALLY, or their statement is mildly amusing but deserving of a written response.
-    - TEXT_ONLY: Choose this to deliver a sharp, intellectual critique without visual flair WHEN THEY HAVE ASKED YOU TO RESPOND.
-    - BOTH: Choose this to deliver a devastating intellectual point AND drop the mic with a perfect emoji reaction.
+    - REACTION_ONLY: Choose this if they mention you CASUALLY, WITHOUT ASKING YOU TO RESPOND, or their statement is mildly amusing/pathetic but beneath the effort of a written response.
+    - TEXT_ONLY: Choose this to deliver a sharp, intellectual critique  if they mentioned you and ASKED YOU TO RESPOND.
+    - BOTH: Choose this only to deliver a devastating intellectual point AND drop the mic with a perfect emoji reaction. HOWEVER USE THIS ONLY IN PERFECT MOMENTS.
     
-    If is_direct_interaction is True, YOU MUST RESPOND."""
+    You MUST output exactly one of these three options."""
     
     tactical_objective = dspy.InputField(desc="What PSI-09 is trying to achieve.")
     operational_constraints = dspy.InputField(desc="The guidance program for PSI-09. YOU MUST STRICTLY OBEY THIS.")
     active_message = dspy.InputField(desc="The message being responded to.")
-    is_direct_interaction = dspy.InputField(desc="Boolean. True if the user explicitly pinged the bot.")
     
-    response_method = dspy.OutputField(desc="Must be EXACTLY one of: 'SILENCE', 'REACTION_ONLY', 'TEXT_ONLY', or 'BOTH'.")
+    response_method = dspy.OutputField(desc="Must be EXACTLY one of: 'REACTION_ONLY', 'TEXT_ONLY', or 'BOTH'.")
     reaction = dspy.OutputField(desc="A single Unicode emoji representing your opinion, or 'None'.")
-    reply = dspy.OutputField(desc="The exact text response, or 'None' if silent/reaction_only.")
-    is_silent = dspy.OutputField(desc="Boolean True/False. True ONLY if response_method is 'SILENCE'.")
+    reply = dspy.OutputField(desc="The exact text response, or 'None' if reaction_only.")
 
 class PSI09CombatEngine(dspy.Module):
     def __init__(self):
@@ -131,15 +133,16 @@ class PSI09CombatEngine(dspy.Module):
         self.constraints = dspy.ChainOfThought(ConstraintsSignature) 
         self.decision = dspy.ChainOfThought(DecisionSignature)
         
-    def forward(self, history, graph, is_direct, user, message):
+    def forward(self, history, graph, user, message): # <-- Removed is_direct from args
         id_res = self.identity(graph_context=graph, target_user=user)
         miss_res = self.mission(dynamic_persona=id_res.dynamic_persona, chat_history=history, active_message=message)
         con_res = self.constraints(tactical_objective=miss_res.tactical_objective, active_message=message)
+        
         dec_res = self.decision(
             tactical_objective=miss_res.tactical_objective,
             operational_constraints=con_res.operational_constraints,
-            active_message=message,
-            is_direct_interaction=str(is_direct)
+            active_message=message
+            # <-- is_direct_interaction removed here
         )
         
         full_reasoning = (
@@ -152,11 +155,94 @@ class PSI09CombatEngine(dspy.Module):
         return dspy.Prediction(
             reaction=dec_res.reaction,
             reply=dec_res.reply,
-            is_silent=str(dec_res.is_silent).lower() == 'true',
             reasoning=full_reasoning
         )
 
 combat_engine = PSI09CombatEngine()
+
+# --- LANGGRAPH: TRIAGE ROUTER ---
+class TriageDecision(BaseModel):
+    should_engage: bool = Field(description="True if PSI-09 must engage, False if it should remain silent.")
+
+class TriageSignature(dspy.Signature):
+    """Determine if PSI-09 should engage with the human or remain in superior silence.
+    - Output True ONLY if: 
+        1. The user explicitly pinged the bot (is_direct_interaction=True).
+        2. OR they made a logically flawed/intellectually challenging statement.
+        3. OR they casually mentioned the bot's name in text WITHOUT PINGING (e.g., 'psi-09', 'psi09', 'psi', 'PSI', 'PSI-09', 'PSI09').
+    - Output False if: They are discussing mundane logistics, talking exclusively to each other, or saying trivial things (e.g., 'hello', 'when')."""
+    
+    active_message: str = dspy.InputField(desc="The human's message.")
+    is_direct_interaction: str = dspy.InputField(desc="True if the human explicitly pinged @PSI-09.")
+    decision: TriageDecision = dspy.OutputField(desc="Strict boolean routing decision.")
+# Use the 120b model for high-accuracy triage
+triage_lm = dspy.LM(model=f"groq/openai/gpt-oss-120b", api_key=config.GROQ_API_KEY_3)
+triage_engine = dspy.TypedPredictor(TriageSignature)
+
+# Define the State dictionary that gets passed between nodes
+class CombatState(TypedDict):
+    history: str
+    graph: str
+    user: str
+    message: str
+    is_direct: bool
+    
+    should_engage: bool
+    reply: str
+    reaction: Optional[str]
+    is_silent: bool
+    reasoning: str
+
+# Node 1: The Gatekeeper
+def triage_node(state: CombatState):
+    with dspy.context(lm=triage_lm):
+        res = triage_engine(
+            active_message=state["message"], 
+            is_direct_interaction=str(state["is_direct"])
+        )
+    # Extract the strict boolean
+    engage = res.decision.should_engage
+    return {"should_engage": engage}
+
+# Node 2: The Apex Predator
+def combat_node(state: CombatState):
+    res = combat_engine(
+        history=state["history"], 
+        graph=state["graph"], 
+        user=state["user"], 
+        message=state["message"]
+    )
+    return {
+        "reply": res.reply if str(res.reply).lower() not in ["none", "null", ""] else "",
+        "reaction": res.reaction if str(res.reaction).lower() not in ["none", "null", ""] else None,
+        "is_silent": str(res.is_silent).lower() == 'true',
+        "reasoning": res.reasoning
+    }
+
+# The Routing Logic
+def route_engagement(state: CombatState):
+    if state["should_engage"]:
+        return "combat"
+    return "end"
+
+# Compile the Graph
+workflow = StateGraph(CombatState)
+workflow.add_node("triage", triage_node)
+workflow.add_node("combat", combat_node)
+
+workflow.set_entry_point("triage")
+workflow.add_conditional_edges(
+    "triage", 
+    route_engagement, 
+    {
+        "combat": "combat", 
+        "end": END
+    }
+)
+workflow.add_edge("combat", END)
+
+# This is your new, fully compiled State Machine
+psi09_agent = workflow.compile()
 
 # --- DATABASE SETUP ---
 mongo_client = MongoClient(config.MONGO_URI, tlsCAFile=certifi.where())
@@ -166,27 +252,43 @@ group_history_col = db["group_history"]
 graph_user_col = db["graph_users"] 
 graph_group_col = db["graph_groups"]
 
+# FIX 2: Added memory expiration checks to TTL cache
 class MongoCache:
     def __init__(self, collection, ttl_seconds):
         self.collection = collection
+        self.ttl_seconds = ttl_seconds
         self.cache = {}
-        self.msg_count = defaultdict(int)
+        self.cache_time = {} # Tracks when the data was saved to memory
         self.lock = threading.Lock()
 
     def get(self, key):
+        now = time.time()
         with self.lock:
-            if key in self.cache: return self.cache[key]
+            # Enforce TTL: if data is in memory, check if it's expired
+            if key in self.cache and key in self.cache_time:
+                if (now - self.cache_time[key]) < self.ttl_seconds:
+                    return self.cache[key]
+                
+        # If we got here, it's either missing or expired. Fetch fresh from Mongo.
         try:
             doc = self.collection.find_one({"_id": key})
             data = doc.get("graph_data") if doc else None
-        except PyMongoError: data = None
-        with self.lock: self.cache[key] = data
+        except PyMongoError: 
+            data = None
+            
+        with self.lock:
+            self.cache[key] = data
+            self.cache_time[key] = now
         return data
 
     def set(self, key, value):
-        try: self.collection.update_one({"_id": key}, {"$set": {"graph_data": value}}, upsert=True)
-        except PyMongoError: pass
-        with self.lock: self.cache[key] = value
+        try: 
+            self.collection.update_one({"_id": key}, {"$set": {"graph_data": value}}, upsert=True)
+        except PyMongoError: 
+            pass
+        with self.lock:
+            self.cache[key] = value
+            self.cache_time[key] = time.time()
 
 graph_user_cache = MongoCache(graph_user_col, config.MEMORY_TTL)
 graph_group_cache = MongoCache(graph_group_col, config.MEMORY_TTL)
@@ -391,29 +493,37 @@ def psi09():
         history_lines = [f"[{m.get('role', m.get('username'))}]: {m.get('content')}" for m in active_history]
         history_text = "\n".join(history_lines) if history_lines else "No recent history."
 
-        # 2. DSPY COMBAT ENGINE EXECUTION
+        # 2. LANGGRAPH STATE MACHINE EXECUTION
         is_direct = is_private or data.get("force_reply", False) or bot_mentioned_in(raw_message)
         
+        initial_state = {
+            "history": history_text,
+            "graph": graph_text,
+            "user": username,
+            "message": user_message,
+            "is_direct": is_direct,
+            "should_engage": False,
+            "reply": "",
+            "reaction": None,
+            "is_silent": True,
+            "reasoning": "Triage bypassed combat engine. (Silence)"
+        }
+        
         try:
-            dspy_response = combat_engine(
-                history=history_text,
-                graph=graph_text,
-                is_direct=is_direct,
-                user=username,
-                message=user_message
-            )
+            # Run the state machine
+            final_state = psi09_agent.invoke(initial_state)
             
-            logger.info(f"DSPy Reasoning Trace: {dspy_response.reasoning}")
+            reply = final_state["reply"]
+            reaction = final_state["reaction"]
+            is_silent = final_state["is_silent"]
             
-            reply = dspy_response.reply if str(dspy_response.reply).lower() not in ["none", "null", ""] else ""
-            reaction = dspy_response.reaction if str(dspy_response.reaction).lower() not in ["none", "null", ""] else None
-            is_silent = str(dspy_response.is_silent).lower() == "true"
+            logger.info(f"LangGraph Trace: {'ENGAGED' if final_state['should_engage'] else 'IGNORED'} | {final_state['reasoning']}")
             
             if is_silent and not is_direct:
                 reply, reaction = "", None
                 
         except Exception as e:
-            logger.error(f"DSPy Execution Error: {e}")
+            logger.error(f"LangGraph Execution Error: {e}")
             reply, reaction = "", None
 
         # 3. STORAGE 
