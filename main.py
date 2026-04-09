@@ -112,6 +112,13 @@ class ConstraintsSignature(dspy.Signature):
     active_message = dspy.InputField(desc="The message being responded to.")
     operational_constraints = dspy.OutputField(desc="A guidance mandate for PSI-09.")
 
+class CombatDecision(BaseModel):
+    response_method: Literal["REACTION_ONLY", "TEXT_ONLY", "BOTH"] = Field(
+        description="You MUST select exactly one of these three exact strings."
+    )
+    reaction: Optional[str] = Field(description="A single Unicode emoji, or 'None'.")
+    reply: Optional[str] = Field(description="The exact text response, or 'None' if reaction_only.")
+
 class DecisionSignature(dspy.Signature):
     """Determine the exact response method based on the tactical objective.
     YOU are PSI-09, if anybody mentions "@PSI-09" or "psi09", they are referring to YOU.
@@ -131,36 +138,44 @@ class DecisionSignature(dspy.Signature):
     reaction = dspy.OutputField(desc="A single Unicode emoji representing your opinion, or 'None'.")
     reply = dspy.OutputField(desc="The exact text response, or 'None' if reaction_only.")
 
+    decision: CombatDecision = dspy.OutputField(desc="The perfectly structured payload.")
+
 class PSI09CombatEngine(dspy.Module):
     def __init__(self):
         super().__init__()
         self.identity = dspy.ChainOfThought(IdentitySignature)
         self.mission = dspy.ChainOfThought(MissionSignature)
         self.constraints = dspy.ChainOfThought(ConstraintsSignature) 
-        self.decision = dspy.ChainOfThought(DecisionSignature)
+        # Note: We don't initialize the decision step here anymore, we call it directly below
         
-    def forward(self, history, graph, user, message): # <-- Removed is_direct from args
+    def forward(self, history, graph, user, message):
         id_res = self.identity(graph_context=graph, target_user=user)
         miss_res = self.mission(dynamic_persona=id_res.dynamic_persona, chat_history=history, active_message=message)
         con_res = self.constraints(tactical_objective=miss_res.tactical_objective, active_message=message)
         
-        dec_res = self.decision(
+        # Enforce Pydantic strict typing at runtime
+        decision_engine = dspy.Predict(DecisionSignature)
+        dec_res = decision_engine(
             tactical_objective=miss_res.tactical_objective,
             operational_constraints=con_res.operational_constraints,
             active_message=message
-            # <-- is_direct_interaction removed here
         )
+        
+        # Extract safely from the Pydantic model
+        final_method = dec_res.decision.response_method
+        final_reaction = dec_res.decision.reaction
+        final_reply = dec_res.decision.reply
         
         full_reasoning = (
             f"ID Trace: {id_res.reasoning}\n"
             f"Mission Trace: {miss_res.reasoning}\n"
             f"Guidance: {con_res.operational_constraints}\n"
-            f"Decision Trace: {dec_res.reasoning} -> Selected: {dec_res.response_method}"
+            f"Decision Trace: Selected {final_method}"
         )
         
         return dspy.Prediction(
-            reaction=dec_res.reaction,
-            reply=dec_res.reply,
+            reaction=final_reaction,
+            reply=final_reply,
             reasoning=full_reasoning
         )
 
