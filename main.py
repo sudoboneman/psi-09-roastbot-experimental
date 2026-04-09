@@ -248,7 +248,7 @@ def triage_node(state: CombatState):
     engage = res.decision.should_engage
     
     # Optional: Log which model caught the request for debugging
-    logger.info(f"Triage processed by: {current_triage_lm.model_name} -> Engage: {engage}")
+    logger.info(f"Triage processed by: {current_triage_lm.model} -> Engage: {engage}")
     
     return {"should_engage": engage}
 
