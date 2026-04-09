@@ -501,7 +501,6 @@ def psi09():
             "should_engage": False,
             "reply": "",
             "reaction": None,
-            "is_silent": True,
             "reasoning": "Triage bypassed combat engine. (Silence)"
         }
         
@@ -511,12 +510,8 @@ def psi09():
             
             reply = final_state["reply"]
             reaction = final_state["reaction"]
-            is_silent = final_state["is_silent"]
             
             logger.info(f"LangGraph Trace: {'ENGAGED' if final_state['should_engage'] else 'IGNORED'} | {final_state['reasoning']}")
-            
-            if is_silent and not is_direct:
-                reply, reaction = "", None
                 
         except Exception as e:
             logger.error(f"LangGraph Execution Error: {e}")
