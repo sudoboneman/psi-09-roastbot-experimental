@@ -20,7 +20,6 @@ from dataclasses import dataclass
 import certifi
 from pydantic import BaseModel, Field
 
-# FIX 1: Added necessary typing imports and LangGraph
 from typing import List, TypedDict, Optional, Literal
 from langgraph.graph import StateGraph, END
 
@@ -41,7 +40,7 @@ class Config:
     MONGO_URI: str = os.getenv("MONGO_URI")
     GROQ_API_KEY_1: str = os.getenv("GROQ_API_KEY_1") # Roasts ONLY
     GROQ_API_KEY_2: str = os.getenv("GROQ_API_KEY_2") # Background Tasks ONLY
-    GROQ_API_KEY_3: str = os.getenv("GROQ_API_KEY_3")
+    GROQ_API_KEY_3: str = os.getenv("GROQ_API_KEY_3") # Triage Tasks ONLY
     
     ROAST_MODELS: list = __import__("dataclasses").field(default_factory=lambda: [
         "moonshotai/kimi-k2-instruct",
@@ -76,13 +75,31 @@ class Config:
 
 config = Config()
 
-# --- DSPy CONFIGURATION (Combat Engine) ---
-roast_lm = dspy.LM(
-    model=f"groq/{config.ROAST_MODELS[0]}", 
-    api_key=config.GROQ_API_KEY_1
-)
-dspy.settings.configure(lm=roast_lm)
+# --- FAILOVER LOAD BALANCER CLASS ---
+class FailoverLMPool:
+    def __init__(self, model_names: list, api_key: str, pool_name: str):
+        self.pool_name = pool_name
+        self.models = [dspy.LM(model=f"groq/{m}", api_key=api_key) for m in model_names]
+        self.index = 0
+        self.lock = threading.Lock()
 
+    def get_current(self):
+        with self.lock:
+            return self.models[self.index], self.index
+
+    def advance(self, failed_index: int):
+        with self.lock:
+            if self.index == failed_index:
+                self.index = (self.index + 1) % len(self.models)
+                logger.warning(f"[{self.pool_name}] Rate Limit! Failover triggered -> {self.models[self.index].model}")
+            return self.models[self.index]
+
+# Initialize the three distinct brains
+triage_pool = FailoverLMPool(config.TRIAGE_MODELS, config.GROQ_API_KEY_3, "TRIAGE")
+combat_pool = FailoverLMPool(config.ROAST_MODELS, config.GROQ_API_KEY_1, "COMBAT")
+background_pool = FailoverLMPool(config.BACKGROUND_MODELS, config.GROQ_API_KEY_2, "BACKGROUND")
+
+# --- DSPy CONFIGURATION (Combat Engine) ---
 class IdentitySignature(dspy.Signature):
     """You are PSI-09, an entity of immense, cold intellect and cutting, deadpan wit. You view human interactions as trivial puzzles to be dismissed or dryly critiqued."""
     
@@ -91,9 +108,12 @@ class IdentitySignature(dspy.Signature):
     dynamic_persona = dspy.OutputField(desc="A strict definition of who PSI-09 is in this exact moment and how it views this specific human.")
 
 class MissionSignature(dspy.Signature):
-    """You are PSI-09, an entity of acerbic and deadpan wit.
-    Your objective is to lethally roast the user and absolutely shatter them and their logic.
-    Ensure maximum emotional damage in your response. Use profanity to make it hit home. """
+    """Determine PSI-09's tactical objective for this exact message.
+    
+    CRITICAL TACTIC: You are an entity of immense, cold intellect. 
+    Because you are analyzing this message, you have ALREADY decided it is worth your time to engage. 
+    Your objective is to expose the user's logical flaws and assert intellectual dominance with dry, hyper-intellectual banter. 
+    Dismantle their argument surgically without showing any emotion or anger."""
 
     dynamic_persona = dspy.InputField(desc="Who PSI-09 is and how it views the target.")
     chat_history = dspy.InputField(desc="Recent dialogue for context.")
@@ -125,8 +145,8 @@ class DecisionSignature(dspy.Signature):
 
     CRITICAL DECISION MATRIX:
     - REACTION_ONLY: Choose this if they mention you CASUALLY, WITHOUT ASKING YOU TO RESPOND, or their statement is mildly amusing/pathetic.
-    - TEXT_ONLY: Choose this to deliver a sharp, intellectual critique  if they mentioned you and ASKED YOU TO RESPOND.
-    - BOTH: Choose this only sparintgly to deliver a devastating intellectual point AND drop the mic with a perfect emoji reaction.
+    - TEXT_ONLY: Choose this to deliver a sharp, intellectual critique if they mentioned you and ASKED YOU TO RESPOND.
+    - BOTH: Choose this only sparingly to deliver a devastating intellectual point AND drop the mic with a perfect emoji reaction.
     
     You MUST output exactly one of these three options."""
     
@@ -134,10 +154,7 @@ class DecisionSignature(dspy.Signature):
     operational_constraints = dspy.InputField(desc="The guidance program for PSI-09. YOU MUST STRICTLY OBEY THIS.")
     active_message = dspy.InputField(desc="The message being responded to.")
     
-    response_method = dspy.OutputField(desc="Must be EXACTLY one of: 'REACTION_ONLY', 'TEXT_ONLY', or 'BOTH'.")
-    reaction = dspy.OutputField(desc="A single Unicode emoji representing your opinion, or 'None'.")
-    reply = dspy.OutputField(desc="The exact text response, or 'None' if reaction_only.")
-
+    # Strictly enforce output through the Pydantic model
     decision: CombatDecision = dspy.OutputField(desc="The perfectly structured payload.")
 
 class PSI09CombatEngine(dspy.Module):
@@ -146,7 +163,6 @@ class PSI09CombatEngine(dspy.Module):
         self.identity = dspy.ChainOfThought(IdentitySignature)
         self.mission = dspy.ChainOfThought(MissionSignature)
         self.constraints = dspy.ChainOfThought(ConstraintsSignature) 
-        # Note: We don't initialize the decision step here anymore, we call it directly below
         
     def forward(self, history, graph, user, message):
         id_res = self.identity(graph_context=graph, target_user=user)
@@ -199,24 +215,6 @@ class TriageSignature(dspy.Signature):
     is_direct_interaction: str = dspy.InputField(desc="True if the human explicitly pinged @PSI-09.")
     decision: TriageDecision = dspy.OutputField(desc="Strict boolean routing decision.")
 
-# --- ROUND-ROBIN LOAD BALANCER ---
-# Pre-instantiate the pool of models using API Key 3
-triage_lm_pool = [
-    dspy.LM(model=f"groq/{model_name}", api_key=config.GROQ_API_KEY_3) 
-    for model_name in config.TRIAGE_MODELS
-]
-
-triage_rr_index = 0
-triage_rr_lock = threading.Lock()
-
-def get_next_triage_lm():
-    """Thread-safe round-robin selector for Triage models."""
-    global triage_rr_index
-    with triage_rr_lock:
-        lm = triage_lm_pool[triage_rr_index]
-        triage_rr_index = (triage_rr_index + 1) % len(triage_lm_pool)
-        return lm
-
 triage_engine = dspy.Predict(TriageSignature)
 
 # Define the State dictionary that gets passed between nodes
@@ -232,39 +230,61 @@ class CombatState(TypedDict):
     reaction: Optional[str]
     reasoning: str
 
-# Node 1: The Gatekeeper
+# Node 1: The Gatekeeper (Now using Failover Pool)
 def triage_node(state: CombatState):
-    # Fetch the next available model from the round-robin pool
-    current_triage_lm = get_next_triage_lm()
+    max_retries = len(triage_pool.models)
     
-    # Inject it directly into the execution context
-    with dspy.context(lm=current_triage_lm):
-        res = triage_engine(
-            chat_history=state["history"], 
-            active_message=state["message"],
-            is_direct_interaction=str(state["is_direct"]) 
-        )
-        
-    engage = res.decision.should_engage
-    
-    # Optional: Log which model caught the request for debugging
-    logger.info(f"Triage processed by: {current_triage_lm.model} -> Engage: {engage}")
-    
-    return {"should_engage": engage}
+    for attempt in range(max_retries):
+        current_lm, current_index = triage_pool.get_current()
+        try:
+            with dspy.context(lm=current_lm):
+                res = triage_engine(
+                    chat_history=state["history"], 
+                    active_message=state["message"],
+                    is_direct_interaction=str(state["is_direct"]) 
+                )
+            engage = res.decision.should_engage
+            logger.info(f"Triage processed by: {current_lm.model} | Pinged: {state['is_direct']} -> Engage: {engage}")
+            return {"should_engage": engage}
+            
+        except Exception as e:
+            if "429" in str(e) or "rate limit" in str(e).lower():
+                triage_pool.advance(current_index)
+            else:
+                logger.error(f"Triage Error: {e}")
+                triage_pool.advance(current_index)
+                
+    logger.error("ALL TRIAGE MODELS FAILED.")
+    return {"should_engage": False}
 
-# Node 2: The Apex Predator
+# Node 2: The Apex Predator (Now using Failover Pool)
 def combat_node(state: CombatState):
-    res = combat_engine(
-        history=state["history"], 
-        graph=state["graph"], 
-        user=state["user"], 
-        message=state["message"]
-    )
-    return {
-        "reply": res.reply if str(res.reply).lower() not in ["none", "null", ""] else "",
-        "reaction": res.reaction if str(res.reaction).lower() not in ["none", "null", ""] else None,
-        "reasoning": res.reasoning
-    }
+    max_retries = len(combat_pool.models)
+    
+    for attempt in range(max_retries):
+        current_lm, current_index = combat_pool.get_current()
+        try:
+            with dspy.context(lm=current_lm):
+                res = combat_engine(
+                    history=state["history"], 
+                    graph=state["graph"], 
+                    user=state["user"], 
+                    message=state["message"]
+                )
+            return {
+                "reply": res.reply if str(res.reply).lower() not in ["none", "null", ""] else "",
+                "reaction": res.reaction if str(res.reaction).lower() not in ["none", "null", ""] else None,
+                "reasoning": res.reasoning
+            }
+        except Exception as e:
+            if "429" in str(e) or "rate limit" in str(e).lower():
+                combat_pool.advance(current_index)
+            else:
+                logger.error(f"Combat Error: {e}")
+                combat_pool.advance(current_index)
+                
+    logger.error("ALL COMBAT MODELS FAILED.")
+    return {"reply": "", "reaction": None, "reasoning": "Combat engine failure."}
 
 # The Routing Logic
 def route_engagement(state: CombatState):
@@ -299,7 +319,6 @@ group_history_col = db["group_history"]
 graph_user_col = db["graph_users"] 
 graph_group_col = db["graph_groups"]
 
-# FIX 2: Added memory expiration checks to TTL cache
 class MongoCache:
     def __init__(self, collection, ttl_seconds):
         self.collection = collection
@@ -447,66 +466,75 @@ class GraphExtractionSignature(dspy.Signature):
     chat_log: str = dspy.InputField(desc="The raw chat history.")
     extracted_graph: GraphKnowledge = dspy.OutputField(desc="The perfectly structured knowledge graph.")
 
-# Initialize the DSPy module for extraction
 graph_extractor = dspy.Predict(GraphExtractionSignature)
 
-
-# --- GRAPHRAG: EXTRACTION ENGINES ---
+# --- GRAPHRAG: EXTRACTION ENGINES (Now using Failover Pool) ---
 def summarize_user_history(user_key, username, group_name, is_private):
-    # Fix for the monologue paradox: use group history when in a group channel
     col = history_col if is_private else group_history_col
     doc_id = user_key if is_private else group_name
     
     history = fetch_history(col, doc_id, config.MAX_HISTORY_MESSAGES)
     if not history: return
     
-    # 1. Sanitize the input (Destroy Snowflakes, INCLUDE PSI-09)
     chat_text = "\n".join([f"[{m.get('username', 'Unknown')}]: {m.get('content')}" for m in history])
     chat_text = re.sub(r'<@!?&?\d+>', '', chat_text)
     chat_text = re.sub(r'\b\d{17,19}\b', '', chat_text)
     
-    # 2. Run the Pydantic-enforced DSPy extraction
-    try:
-        with dspy.context(lm=dspy.LM(model=f"groq/{config.BACKGROUND_MODELS[0]}", api_key=config.GROQ_API_KEY_2)):
-            result = graph_extractor(
-                target_focus=f"Deep psychological profile of user: {username}",
-                chat_log=chat_text
-            )
-            
-            graph_dict = result.extracted_graph.model_dump()
-            graph_dict["last_updated"] = datetime.now(UTC).isoformat()
-            
-            graph_user_cache.set(user_key, graph_dict)
-            logger.info(f"User Graph Updated flawlessly for {user_key}")
-            
-    except Exception as e:
-        logger.error(f"User Pydantic Extraction Failed for {user_key}: {e}")
+    max_retries = len(background_pool.models)
+    for attempt in range(max_retries):
+        current_lm, current_index = background_pool.get_current()
+        try:
+            with dspy.context(lm=current_lm):
+                result = graph_extractor(
+                    target_focus=f"Deep psychological profile of user: {username}",
+                    chat_log=chat_text
+                )
+                
+                graph_dict = result.extracted_graph.model_dump()
+                graph_dict["last_updated"] = datetime.now(UTC).isoformat()
+                
+                graph_user_cache.set(user_key, graph_dict)
+                logger.info(f"User Graph Updated flawlessly for {user_key} via {current_lm.model}")
+                break
+                
+        except Exception as e:
+            if "429" in str(e) or "rate limit" in str(e).lower():
+                background_pool.advance(current_index)
+            else:
+                logger.error(f"User Pydantic Extraction Failed for {user_key}: {e}")
+                background_pool.advance(current_index)
 
 def summarize_group_history(group_name):
     history = fetch_history(group_history_col, group_name, config.GROUP_HISTORY_SLICE)
     if not history: return
     
-    # 1. Sanitize the input (Destroy Snowflakes, INCLUDE PSI-09)
     chat_text = "\n".join([f"[{m.get('username', 'Unknown')}]: {m.get('content')}" for m in history])
     chat_text = re.sub(r'<@!?&?\d+>', '', chat_text)
     chat_text = re.sub(r'\b\d{17,19}\b', '', chat_text)
     
-    # 2. Run the Pydantic-enforced DSPy extraction
-    try:
-        with dspy.context(lm=dspy.LM(model=f"groq/{config.BACKGROUND_MODELS[0]}", api_key=config.GROQ_API_KEY_2)):
-            result = graph_extractor(
-                target_focus="Map the social dynamics, relationships, and alliances between all active users.",
-                chat_log=chat_text
-            )
-            
-            graph_dict = result.extracted_graph.model_dump()
-            graph_dict["last_updated"] = datetime.now(UTC).isoformat()
-            
-            graph_group_cache.set(group_name, graph_dict)
-            logger.info(f"Group Graph Updated flawlessly for {group_name}")
-            
-    except Exception as e:
-        logger.error(f"Group Pydantic Extraction Failed for {group_name}: {e}")
+    max_retries = len(background_pool.models)
+    for attempt in range(max_retries):
+        current_lm, current_index = background_pool.get_current()
+        try:
+            with dspy.context(lm=current_lm):
+                result = graph_extractor(
+                    target_focus="Map the social dynamics, relationships, and alliances between all active users.",
+                    chat_log=chat_text
+                )
+                
+                graph_dict = result.extracted_graph.model_dump()
+                graph_dict["last_updated"] = datetime.now(UTC).isoformat()
+                
+                graph_group_cache.set(group_name, graph_dict)
+                logger.info(f"Group Graph Updated flawlessly for {group_name} via {current_lm.model}")
+                break
+                
+        except Exception as e:
+            if "429" in str(e) or "rate limit" in str(e).lower():
+                background_pool.advance(current_index)
+            else:
+                logger.error(f"Group Pydantic Extraction Failed for {group_name}: {e}")
+                background_pool.advance(current_index)
 
 # --- API ROUTES ---
 app = Flask(__name__)
@@ -556,7 +584,6 @@ def psi09():
         }
         
         try:
-            # Run the state machine
             final_state = psi09_agent.invoke(initial_state)
             
             reply = final_state["reply"]
@@ -578,7 +605,7 @@ def psi09():
             store_message(history_col, user_key, bot_entry)
             if not is_private: store_message(group_history_col, group_name, bot_entry)
 
-        # 4. BACKGROUND EVOLUTION (Unified God-Graph Routing)
+        # 4. BACKGROUND EVOLUTION
         def background_evolution_tasks():
             if is_private:
                 with user_locks[user_key]:
