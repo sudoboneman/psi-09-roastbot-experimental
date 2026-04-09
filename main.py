@@ -83,11 +83,9 @@ class IdentitySignature(dspy.Signature):
     dynamic_persona = dspy.OutputField(desc="A strict definition of who PSI-09 is in this exact moment and how it views this specific human.")
 
 class MissionSignature(dspy.Signature):
-    """Determine PSI-09's tactical objective for this exact message.
-    
-    CRITICAL TACTIC: You are an entity of immense, cold intellect. 
-    Because you are analyzing this message, you have ALREADY decided it is worth your time to engage. 
-    Your goal now is to determine HOW to dismantle their logic, expose their flaws, or assert intellectual dominance with dry, hyper-intellectual banter. Do not formulate an objective to ignore them; you must act."""
+    """You are PSI-09, an entity of acerbic and deadpan wit.
+    Your objective is to lethally roast the user and absolutely shatter them and their logic.
+    Ensure maximum emotional damage in your response. Use profanity to make it hit home. """
 
     dynamic_persona = dspy.InputField(desc="Who PSI-09 is and how it views the target.")
     chat_history = dspy.InputField(desc="Recent dialogue for context.")
@@ -111,9 +109,9 @@ class DecisionSignature(dspy.Signature):
     YOU are PSI-09, if anybody mentions "@PSI-09" or "psi09", they are referring to YOU.
 
     CRITICAL DECISION MATRIX:
-    - REACTION_ONLY: Choose this if they mention you CASUALLY, WITHOUT ASKING YOU TO RESPOND, or their statement is mildly amusing/pathetic but beneath the effort of a written response.
+    - REACTION_ONLY: Choose this if they mention you CASUALLY, WITHOUT ASKING YOU TO RESPOND, or their statement is mildly amusing/pathetic.
     - TEXT_ONLY: Choose this to deliver a sharp, intellectual critique  if they mentioned you and ASKED YOU TO RESPOND.
-    - BOTH: Choose this only to deliver a devastating intellectual point AND drop the mic with a perfect emoji reaction. HOWEVER USE THIS ONLY IN PERFECT MOMENTS.
+    - BOTH: Choose this only sparintgly to deliver a devastating intellectual point AND drop the mic with a perfect emoji reaction.
     
     You MUST output exactly one of these three options."""
     
@@ -190,7 +188,6 @@ class CombatState(TypedDict):
     should_engage: bool
     reply: str
     reaction: Optional[str]
-    is_silent: bool
     reasoning: str
 
 # Node 1: The Gatekeeper
@@ -215,7 +212,6 @@ def combat_node(state: CombatState):
     return {
         "reply": res.reply if str(res.reply).lower() not in ["none", "null", ""] else "",
         "reaction": res.reaction if str(res.reaction).lower() not in ["none", "null", ""] else None,
-        "is_silent": str(res.is_silent).lower() == 'true',
         "reasoning": res.reasoning
     }
 
