@@ -56,6 +56,14 @@ class Config:
         "llama-3.3-70b-versatile",
         "meta-llama/llama-4-scout-17b-16e-instruct"
     ])
+
+    TRIAGE_MODELS: list = __import__("dataclasses").field(default_factory=lambda: [
+        "moonshotai/kimi-k2-instruct",
+        "moonshotai/kimi-k2-instruct-0905",
+        "openai/gpt-oss-120b",
+        "llama-3.3-70b-versatile",
+        "meta-llama/llama-4-scout-17b-16e-instruct"
+    ])
     
     BOT_NUMBER: str = os.getenv("BOT_NUMBER")
     DISCORD_ID: str = os.getenv("DISCORD_ID")
@@ -165,17 +173,36 @@ class TriageDecision(BaseModel):
 class TriageSignature(dspy.Signature):
     """Determine if PSI-09 should engage with the human or remain in superior silence.
     - Output True ONLY if: 
-        1. The user explicitly pinged the bot (is_direct_interaction=True).
+        1. The user explicitly pinged the bot (is_direct_interaction='True').
         2. OR they made a logically flawed/intellectually challenging statement.
-        3. OR they casually mentioned the bot's name in text WITHOUT PINGING (e.g., 'psi-09', 'psi09', 'psi', 'PSI', 'PSI-09', 'PSI09').
-    - Output False if: They are discussing mundane logistics, talking exclusively to each other, or saying trivial things (e.g., 'hello', 'when')."""
+        3. OR they casually mentioned the bot's name in text WITHOUT PINGING.
+        4. OR there is an active, ongoing conversation with the bot in the immediate chat history.
+    - Output False if: They are discussing mundane logistics, talking exclusively to each other, or saying trivial things not directed at you."""
     
+    chat_history: str = dspy.InputField(desc="Recent dialogue for context to determine if there is an ongoing conversation.")
     active_message: str = dspy.InputField(desc="The human's message.")
     is_direct_interaction: str = dspy.InputField(desc="True if the human explicitly pinged @PSI-09.")
     decision: TriageDecision = dspy.OutputField(desc="Strict boolean routing decision.")
-# Use the 120b model for high-accuracy triage
-triage_lm = dspy.LM(model=f"groq/openai/gpt-oss-120b", api_key=config.GROQ_API_KEY_3)
-triage_engine = dspy.Predict(TriageSignature) # <--- NATIVE PYDANTIC SUPPORT
+
+# --- ROUND-ROBIN LOAD BALANCER ---
+# Pre-instantiate the pool of models using API Key 3
+triage_lm_pool = [
+    dspy.LM(model=f"groq/{model_name}", api_key=config.GROQ_API_KEY_3) 
+    for model_name in config.TRIAGE_MODELS
+]
+
+triage_rr_index = 0
+triage_rr_lock = threading.Lock()
+
+def get_next_triage_lm():
+    """Thread-safe round-robin selector for Triage models."""
+    global triage_rr_index
+    with triage_rr_lock:
+        lm = triage_lm_pool[triage_rr_index]
+        triage_rr_index = (triage_rr_index + 1) % len(triage_lm_pool)
+        return lm
+
+triage_engine = dspy.Predict(TriageSignature)
 
 # Define the State dictionary that gets passed between nodes
 class CombatState(TypedDict):
@@ -192,13 +219,22 @@ class CombatState(TypedDict):
 
 # Node 1: The Gatekeeper
 def triage_node(state: CombatState):
-    with dspy.context(lm=triage_lm):
+    # Fetch the next available model from the round-robin pool
+    current_triage_lm = get_next_triage_lm()
+    
+    # Inject it directly into the execution context
+    with dspy.context(lm=current_triage_lm):
         res = triage_engine(
-            active_message=state["message"], 
-            is_direct_interaction=str(state["is_direct"])
+            chat_history=state["history"], 
+            active_message=state["message"],
+            is_direct_interaction=str(state["is_direct"]) 
         )
-    # Extract the strict boolean
+        
     engage = res.decision.should_engage
+    
+    # Optional: Log which model caught the request for debugging
+    logger.info(f"Triage processed by: {current_triage_lm.model_name} -> Engage: {engage}")
+    
     return {"should_engage": engage}
 
 # Node 2: The Apex Predator
