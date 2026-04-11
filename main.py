@@ -395,10 +395,23 @@ def get_user_graph_context(username, user_key, group_name):
     group_decay = max(0.1, 0.9 ** group_age_days)
     
     for data, decay_factor in [(user_graph, user_decay), (group_graph, group_decay)]:
+        # 1. entity attribute accumulation fix
         for ent in data.get("entities", []):
-            if ent.get("id") not in G:
-                G.add_node(ent.get("id"), type=ent.get("type"), attributes=ent.get("attributes"))
+            node_id = ent.get("id")
+            new_attrs = ent.get("attributes")
+            
+            if node_id not in G:
+                G.add_node(node_id, type=ent.get("type"), attributes=new_attrs)
+            else:
+                # the node exists. merge the psychological traits.
+                if new_attrs and new_attrs != "Unknown":
+                    existing_attrs = G.nodes[node_id].get("attributes")
+                    if not existing_attrs or existing_attrs == "Unknown":
+                        G.nodes[node_id]["attributes"] = new_attrs
+                    elif new_attrs not in str(existing_attrs):
+                        G.nodes[node_id]["attributes"] += f" | {new_attrs}"
                 
+        # 2. edge weight accumulation fix
         for rel in data.get("relationships", []):
             src = rel.get("source")
             tgt = rel.get("target")
@@ -407,50 +420,54 @@ def get_user_graph_context(username, user_key, group_name):
             decayed_weight = base_weight * decay_factor
             
             if G.has_edge(src, tgt):
-                # MATHEMATICAL FIX: Accumulate the weight if they interact in multiple contexts
+                # accumulate the weight if they interact in multiple contexts
                 G[src][tgt]['weight'] += decayed_weight
-                # Append the new relationship descriptor so the LLM sees the full picture
+                # append the new relationship descriptor
                 if rel_desc not in G[src][tgt]['relation']:
                     G[src][tgt]['relation'] += f" | {rel_desc}"
             else:
                 G.add_edge(src, tgt, relation=rel_desc, weight=decayed_weight)
             
     if username not in G:
-        return "No known network connections. Target is socially isolated."
+        return "no known network connections. target is socially isolated."
 
     try:
         social_scores = nx.pagerank(G, weight='weight')
         target_score = social_scores.get(username, 0.0)
         ranked_users = sorted(social_scores.items(), key=lambda x: x[1], reverse=True)
         rank_index = next((i for i, v in enumerate(ranked_users) if v[0] == username), len(ranked_users))
-        social_status = f"Rank {rank_index + 1} out of {len(ranked_users)} active entities."
+        social_status = f"rank {rank_index + 1} out of {len(ranked_users)} active entities."
     except Exception as e:
-        target_score, social_status = 0.0, "Unknown"
+        target_score, social_status = 0.0, "unknown"
 
     try:
         undirected_G = G.to_undirected()
         factions = list(nx_comm.greedy_modularity_communities(undirected_G))
         user_faction = next((list(f) for f in factions if username in f), [])
-        faction_str = ", ".join([u for u in user_faction if u != username]) if len(user_faction) > 1 else "Lone Wolf"
+        faction_str = ", ".join([u for u in user_faction if u != username]) if len(user_faction) > 1 else "lone wolf"
     except:
-        faction_str = "Unknown"
+        faction_str = "unknown"
         
     context_lines = []
-    node_attrs = G.nodes[username].get("attributes", "Unknown")
+    node_attrs = G.nodes[username].get("attributes", "unknown")
     
-    context_lines.append(f"--- TARGET DOSSIER: {username} ---")
-    context_lines.append(f"CORE TRAITS: {node_attrs}")
-    context_lines.append(f"SOCIAL RANK (PageRank): {target_score:.4f} ({social_status})")
-    context_lines.append(f"DETECTED FACTION / ALLIES: {faction_str}")
+    context_lines.append(f"--- target dossier: {username} ---")
+    context_lines.append(f"core traits: {node_attrs}")
+    context_lines.append(f"social rank (pagerank): {target_score:.4f} ({social_status})")
+    context_lines.append(f"detected faction / allies: {faction_str}")
     
-    edges = list(G.in_edges(username, data=True)) + list(G.out_edges(username, data=True))
+    # 3. self-loop duplication fix
+    edges_dict = { (u, v): d for u, v, d in G.in_edges(username, data=True) }
+    edges_dict.update({ (u, v): d for u, v, d in G.out_edges(username, data=True) })
+    edges = [ (u, v, d) for (u, v), d in edges_dict.items() ]
+    
     if edges:
-        context_lines.append("\nACTIVE RELATIONSHIPS (Weighted by Time/Decay):")
+        context_lines.append("\nactive relationships (weighted by time/decay):")
         edges.sort(key=lambda x: x[2].get('weight', 0), reverse=True)
         for source, target, data in edges[:5]:
             w = data.get('weight', 0)
-            status = "[FADING]" if w < 2.0 else "[ACTIVE]"
-            context_lines.append(f"- {status} {source} [{data['relation']}] {target} (Relevance: {w:.1f})")
+            status = "[fading]" if w < 2.0 else "[active]"
+            context_lines.append(f"- {status} {source} [{data['relation']}] {target} (relevance: {w:.1f})")
             
     return "\n".join(context_lines)
 
