@@ -398,10 +398,22 @@ def get_user_graph_context(username, user_key, group_name):
         for ent in data.get("entities", []):
             if ent.get("id") not in G:
                 G.add_node(ent.get("id"), type=ent.get("type"), attributes=ent.get("attributes"))
+                
         for rel in data.get("relationships", []):
+            src = rel.get("source")
+            tgt = rel.get("target")
+            rel_desc = rel.get("relation")
             base_weight = float(rel.get("intensity", 5.0))
             decayed_weight = base_weight * decay_factor
-            G.add_edge(rel.get("source"), rel.get("target"), relation=rel.get("relation"), weight=decayed_weight)
+            
+            if G.has_edge(src, tgt):
+                # MATHEMATICAL FIX: Accumulate the weight if they interact in multiple contexts
+                G[src][tgt]['weight'] += decayed_weight
+                # Append the new relationship descriptor so the LLM sees the full picture
+                if rel_desc not in G[src][tgt]['relation']:
+                    G[src][tgt]['relation'] += f" | {rel_desc}"
+            else:
+                G.add_edge(src, tgt, relation=rel_desc, weight=decayed_weight)
             
     if username not in G:
         return "No known network connections. Target is socially isolated."
