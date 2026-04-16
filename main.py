@@ -43,22 +43,17 @@ class Config:
     GROQ_API_KEY_3: str = os.getenv("GROQ_API_KEY_3") # Triage Tasks ONLY
     
     ROAST_MODELS: list = __import__("dataclasses").field(default_factory=lambda: [
-        "moonshotai/kimi-k2-instruct",
-        "moonshotai/kimi-k2-instruct-0905",
+        "qwen/qwen3-32b",
         "openai/gpt-oss-120b"
     ])
     
     BACKGROUND_MODELS: list = __import__("dataclasses").field(default_factory=lambda: [
-        "moonshotai/kimi-k2-instruct",
-        "moonshotai/kimi-k2-instruct-0905",
         "openai/gpt-oss-120b",
         "llama-3.3-70b-versatile",
         "meta-llama/llama-4-scout-17b-16e-instruct"
     ])
 
     TRIAGE_MODELS: list = __import__("dataclasses").field(default_factory=lambda: [
-        "moonshotai/kimi-k2-instruct",
-        "moonshotai/kimi-k2-instruct-0905",
         "openai/gpt-oss-120b",
         "llama-3.3-70b-versatile",
         "meta-llama/llama-4-scout-17b-16e-instruct"
