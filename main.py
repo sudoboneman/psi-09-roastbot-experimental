@@ -95,9 +95,9 @@ class NvidiaRoundRobinPool:
                     model=f"openai/{model_name}",
                     api_base="https://integrate.api.nvidia.com/v1",
                     api_key=key,
-                    temperature=0.6,
-                    top_p=0.9,
-                    max_tokens=4096
+                    temperature=0.9,
+                    top_p=1.0,
+                    max_tokens=1024
                 ))
         self.index = 0
         self.lock = threading.Lock()
