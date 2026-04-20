@@ -38,16 +38,10 @@ UTC = timezone.utc
 @dataclass
 class Config:
     MONGO_URI: str = os.getenv("MONGO_URI")
-    GROQ_API_KEY_1: str = os.getenv("GROQ_API_KEY_1") # Roasts ONLY
+    NVIDIA_API_KEY_1: str = os.getenv("NVIDIA_API_KEY_1") # Combat Key 1
+    NVIDIA_API_KEY_2: str = os.getenv("NVIDIA_API_KEY_2") # Combat Key 2
     GROQ_API_KEY_2: str = os.getenv("GROQ_API_KEY_2") # Background Tasks ONLY
     GROQ_API_KEY_3: str = os.getenv("GROQ_API_KEY_3") # Triage Tasks ONLY
-    
-    ROAST_MODELS: list = __import__("dataclasses").field(default_factory=lambda: [
-        "qwen/qwen3-32b",
-        "openai/gpt-oss-120b",
-        "llama-3.3-70b-versatile",
-        "meta-llama/llama-4-scout-17b-16e-instruct"
-    ])
     
     BACKGROUND_MODELS: list = __import__("dataclasses").field(default_factory=lambda: [
         "openai/gpt-oss-120b",
@@ -72,7 +66,7 @@ class Config:
 
 config = Config()
 
-# --- FAILOVER LOAD BALANCER CLASS ---
+# --- LOAD BALANCER CLASSES ---
 class FailoverLMPool:
     def __init__(self, model_names: list, api_key: str, pool_name: str):
         self.pool_name = pool_name
@@ -91,10 +85,41 @@ class FailoverLMPool:
                 logger.warning(f"[{self.pool_name}] Rate Limit! Failover triggered -> {self.models[self.index].model}")
             return self.models[self.index]
 
+class NvidiaRoundRobinPool:
+    def __init__(self, api_keys: list, model_name: str, pool_name: str):
+        self.pool_name = pool_name
+        self.models = []
+        for key in api_keys:
+            if key:
+                self.models.append(dspy.LM(
+                    model=f"openai/{model_name}",
+                    api_base="https://integrate.api.nvidia.com/v1",
+                    api_key=key,
+                    temperature=0.6,
+                    top_p=0.9,
+                    max_tokens=4096
+                ))
+        self.index = 0
+        self.lock = threading.Lock()
+
+    def get_next(self):
+        with self.lock:
+            if not self.models:
+                raise ValueError(f"[{self.pool_name}] No API keys configured.")
+            current_model = self.models[self.index]
+            # Proactively advance the index so the next request uses the other key
+            self.index = (self.index + 1) % len(self.models)
+            return current_model
+
 # Initialize the three distinct brains
 triage_pool = FailoverLMPool(config.TRIAGE_MODELS, config.GROQ_API_KEY_3, "TRIAGE")
-combat_pool = FailoverLMPool(config.ROAST_MODELS, config.GROQ_API_KEY_1, "COMBAT")
 background_pool = FailoverLMPool(config.BACKGROUND_MODELS, config.GROQ_API_KEY_2, "BACKGROUND")
+
+nvidia_combat_pool = NvidiaRoundRobinPool(
+    api_keys=[config.NVIDIA_API_KEY_1, config.NVIDIA_API_KEY_2],
+    model_name="moonshotai/kimi-k2-instruct-0905",
+    pool_name="COMBAT"
+)
 
 # --- DSPy CONFIGURATION (Combat Engine) ---
 class IdentitySignature(dspy.Signature):
@@ -133,7 +158,14 @@ class CombatDecision(BaseModel):
     response_method: Literal["REACTION_ONLY", "TEXT_ONLY", "BOTH"] = Field(
         description="You MUST select exactly one of these three exact strings."
     )
-    reaction: Optional[str] = Field(description="A single Unicode emoji, or 'None'.")
+    reaction: Optional[str] = Field(
+        description=(
+            "A SINGLE STANDARD UNICODE EMOJI ONLY. "
+            "DO NOT use mathematical symbols (like ∅) or text shortcodes."
+            "Only use widely supported emojis."
+            "Return 'None' if not using a reaction."
+        )
+    )
     reply: Optional[str] = Field(description="The exact text response, or 'None' if reaction_only.")
 
 class DecisionSignature(dspy.Signature):
@@ -151,7 +183,6 @@ class DecisionSignature(dspy.Signature):
     operational_constraints = dspy.InputField(desc="The guidance program for PSI-09. YOU MUST STRICTLY OBEY THIS.")
     active_message = dspy.InputField(desc="The message being responded to.")
     
-    # Strictly enforce output through the Pydantic model
     decision: CombatDecision = dspy.OutputField(desc="The perfectly structured payload.")
 
 class PSI09CombatEngine(dspy.Module):
@@ -166,7 +197,6 @@ class PSI09CombatEngine(dspy.Module):
         miss_res = self.mission(dynamic_persona=id_res.dynamic_persona, chat_history=history, active_message=message)
         con_res = self.constraints(tactical_objective=miss_res.tactical_objective, active_message=message)
         
-        # Enforce Pydantic strict typing at runtime
         decision_engine = dspy.Predict(DecisionSignature)
         dec_res = decision_engine(
             tactical_objective=miss_res.tactical_objective,
@@ -174,7 +204,6 @@ class PSI09CombatEngine(dspy.Module):
             active_message=message
         )
         
-        # Extract safely from the Pydantic model
         final_method = dec_res.decision.response_method
         final_reaction = dec_res.decision.reaction
         final_reply = dec_res.decision.reply
@@ -227,7 +256,7 @@ class CombatState(TypedDict):
     reaction: Optional[str]
     reasoning: str
 
-# Node 1: The Gatekeeper (Now using Failover Pool)
+# Node 1: The Gatekeeper
 def triage_node(state: CombatState):
     max_retries = len(triage_pool.models)
     
@@ -254,12 +283,12 @@ def triage_node(state: CombatState):
     logger.error("ALL TRIAGE MODELS FAILED.")
     return {"should_engage": False}
 
-# Node 2: The Apex Predator (Now using Failover Pool)
+# Node 2: The Apex Predator (NVIDIA Round-Robin)
 def combat_node(state: CombatState):
-    max_retries = len(combat_pool.models)
+    max_retries = len(nvidia_combat_pool.models)
     
     for attempt in range(max_retries):
-        current_lm, current_index = combat_pool.get_current()
+        current_lm = nvidia_combat_pool.get_next()
         try:
             with dspy.context(lm=current_lm):
                 res = combat_engine(
@@ -274,13 +303,9 @@ def combat_node(state: CombatState):
                 "reasoning": res.reasoning
             }
         except Exception as e:
-            if "429" in str(e) or "rate limit" in str(e).lower():
-                combat_pool.advance(current_index)
-            else:
-                logger.error(f"Combat Error: {e}")
-                combat_pool.advance(current_index)
-                
-    logger.error("ALL COMBAT MODELS FAILED.")
+            logger.error(f"NVIDIA Combat Error (Attempt {attempt + 1}): {e}")
+            
+    logger.error("ALL NVIDIA COMBAT KEYS FAILED.")
     return {"reply": "", "reaction": None, "reasoning": "Combat engine failure."}
 
 # The Routing Logic
@@ -305,7 +330,6 @@ workflow.add_conditional_edges(
 )
 workflow.add_edge("combat", END)
 
-# This is your new, fully compiled State Machine
 psi09_agent = workflow.compile()
 
 # --- DATABASE SETUP ---
@@ -321,18 +345,16 @@ class MongoCache:
         self.collection = collection
         self.ttl_seconds = ttl_seconds
         self.cache = {}
-        self.cache_time = {} # Tracks when the data was saved to memory
+        self.cache_time = {} 
         self.lock = threading.Lock()
 
     def get(self, key):
         now = time.time()
         with self.lock:
-            # Enforce TTL: if data is in memory, check if it's expired
             if key in self.cache and key in self.cache_time:
                 if (now - self.cache_time[key]) < self.ttl_seconds:
                     return self.cache[key]
                 
-        # If we got here, it's either missing or expired. Fetch fresh from Mongo.
         try:
             doc = self.collection.find_one({"_id": key})
             data = doc.get("graph_data") if doc else None
@@ -392,7 +414,6 @@ def get_user_graph_context(username, user_key, group_name):
     group_decay = max(0.1, 0.9 ** group_age_days)
     
     for data, decay_factor in [(user_graph, user_decay), (group_graph, group_decay)]:
-        # 1. entity attribute accumulation fix
         for ent in data.get("entities", []):
             node_id = ent.get("id")
             new_attrs = ent.get("attributes")
@@ -400,7 +421,6 @@ def get_user_graph_context(username, user_key, group_name):
             if node_id not in G:
                 G.add_node(node_id, type=ent.get("type"), attributes=new_attrs)
             else:
-                # the node exists. merge the psychological traits.
                 if new_attrs and new_attrs != "Unknown":
                     existing_attrs = G.nodes[node_id].get("attributes")
                     if not existing_attrs or existing_attrs == "Unknown":
@@ -408,7 +428,6 @@ def get_user_graph_context(username, user_key, group_name):
                     elif new_attrs not in str(existing_attrs):
                         G.nodes[node_id]["attributes"] += f" | {new_attrs}"
                 
-        # 2. edge weight accumulation fix
         for rel in data.get("relationships", []):
             src = rel.get("source")
             tgt = rel.get("target")
@@ -417,54 +436,51 @@ def get_user_graph_context(username, user_key, group_name):
             decayed_weight = base_weight * decay_factor
             
             if G.has_edge(src, tgt):
-                # accumulate the weight if they interact in multiple contexts
                 G[src][tgt]['weight'] += decayed_weight
-                # append the new relationship descriptor
                 if rel_desc not in G[src][tgt]['relation']:
                     G[src][tgt]['relation'] += f" | {rel_desc}"
             else:
                 G.add_edge(src, tgt, relation=rel_desc, weight=decayed_weight)
             
     if username not in G:
-        return "no known network connections. target is socially isolated."
+        return "No known network connections. Target is socially isolated."
 
     try:
         social_scores = nx.pagerank(G, weight='weight')
         target_score = social_scores.get(username, 0.0)
         ranked_users = sorted(social_scores.items(), key=lambda x: x[1], reverse=True)
         rank_index = next((i for i, v in enumerate(ranked_users) if v[0] == username), len(ranked_users))
-        social_status = f"rank {rank_index + 1} out of {len(ranked_users)} active entities."
+        social_status = f"Rank {rank_index + 1} out of {len(ranked_users)} active entities."
     except Exception as e:
-        target_score, social_status = 0.0, "unknown"
+        target_score, social_status = 0.0, "Unknown"
 
     try:
         undirected_G = G.to_undirected()
         factions = list(nx_comm.greedy_modularity_communities(undirected_G))
         user_faction = next((list(f) for f in factions if username in f), [])
-        faction_str = ", ".join([u for u in user_faction if u != username]) if len(user_faction) > 1 else "lone wolf"
+        faction_str = ", ".join([u for u in user_faction if u != username]) if len(user_faction) > 1 else "Lone Wolf"
     except:
-        faction_str = "unknown"
+        faction_str = "Unknown"
         
     context_lines = []
-    node_attrs = G.nodes[username].get("attributes", "unknown")
+    node_attrs = G.nodes[username].get("attributes", "Unknown")
     
-    context_lines.append(f"--- target dossier: {username} ---")
-    context_lines.append(f"core traits: {node_attrs}")
-    context_lines.append(f"social rank (pagerank): {target_score:.4f} ({social_status})")
-    context_lines.append(f"detected faction / allies: {faction_str}")
+    context_lines.append(f"--- TARGET DOSSIER: {username} ---")
+    context_lines.append(f"CORE TRAITS: {node_attrs}")
+    context_lines.append(f"SOCIAL RANK (PageRank): {target_score:.4f} ({social_status})")
+    context_lines.append(f"DETECTED FACTION / ALLIES: {faction_str}")
     
-    # 3. self-loop duplication fix
     edges_dict = { (u, v): d for u, v, d in G.in_edges(username, data=True) }
     edges_dict.update({ (u, v): d for u, v, d in G.out_edges(username, data=True) })
     edges = [ (u, v, d) for (u, v), d in edges_dict.items() ]
     
     if edges:
-        context_lines.append("\nactive relationships (weighted by time/decay):")
+        context_lines.append("\nACTIVE RELATIONSHIPS (Weighted by Time/Decay):")
         edges.sort(key=lambda x: x[2].get('weight', 0), reverse=True)
         for source, target, data in edges[:5]:
             w = data.get('weight', 0)
-            status = "[fading]" if w < 2.0 else "[active]"
-            context_lines.append(f"- {status} {source} [{data['relation']}] {target} (relevance: {w:.1f})")
+            status = "[FADING]" if w < 2.0 else "[ACTIVE]"
+            context_lines.append(f"- {status} {source} [{data['relation']}] {target} (Relevance: {w:.1f})")
             
     return "\n".join(context_lines)
 
@@ -494,7 +510,7 @@ class GraphExtractionSignature(dspy.Signature):
 
 graph_extractor = dspy.Predict(GraphExtractionSignature)
 
-# --- GRAPHRAG: EXTRACTION ENGINES (Now using Failover Pool) ---
+# --- GRAPHRAG: EXTRACTION ENGINES ---
 def summarize_user_history(user_key, username, group_name, is_private):
     col = history_col if is_private else group_history_col
     doc_id = user_key if is_private else group_name
