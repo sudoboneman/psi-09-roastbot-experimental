@@ -44,15 +44,13 @@ class Config:
     GROQ_API_KEY_3: str = os.getenv("GROQ_API_KEY_3") # Triage Tasks ONLY
     
     BACKGROUND_MODELS: list = __import__("dataclasses").field(default_factory=lambda: [
-        "openai/gpt-oss-120b",
-        "llama-3.3-70b-versatile",
-        "meta-llama/llama-4-scout-17b-16e-instruct"
+        "qwen/qwen3-32b",
+        "openai/gpt-oss-120b"
     ])
 
     TRIAGE_MODELS: list = __import__("dataclasses").field(default_factory=lambda: [
         "openai/gpt-oss-120b",
-        "llama-3.3-70b-versatile",
-        "meta-llama/llama-4-scout-17b-16e-instruct"
+        "llama-3.3-70b-versatile"
     ])
     
     BOT_NUMBER: str = os.getenv("BOT_NUMBER")
