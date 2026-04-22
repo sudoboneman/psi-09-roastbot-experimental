@@ -45,12 +45,15 @@ class Config:
     
     BACKGROUND_MODELS: list = __import__("dataclasses").field(default_factory=lambda: [
         "qwen/qwen3-32b",
-        "openai/gpt-oss-120b"
+        "openai/gpt-oss-120b",
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "llama-3.3-70b-versatile"
+
     ])
 
     TRIAGE_MODELS: list = __import__("dataclasses").field(default_factory=lambda: [
         "openai/gpt-oss-120b",
-        "llama-3.3-70b-versatile"
+        "llama-3.3-70b-versatile",
     ])
     
     BOT_NUMBER: str = os.getenv("BOT_NUMBER")
