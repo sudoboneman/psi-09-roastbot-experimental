@@ -617,7 +617,7 @@ def psi09():
         graph_text = get_user_graph_context(username, user_key, group_name)
         
         # Assemble History Text
-        active_history = fetch_history(history_col, user_key, 10) if is_private else fetch_history(group_history_col, group_name, 10)
+        active_history = fetch_history(history_col, user_key, 30) if is_private else fetch_history(group_history_col, group_name, 30)
         history_lines = [f"[{m.get('role', m.get('username'))}]: {m.get('content')}" for m in active_history]
         history_text = "\n".join(history_lines) if history_lines else "No recent history."
 
