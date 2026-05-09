@@ -382,5 +382,3 @@ PSI-09-vRAG/
 **Status:** Active, experimental development  
 **Origin:** 2025  
 **Author:** sudoboneman
-
-Copyright © 2024–2026. All rights reserved.
