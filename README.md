@@ -7,9 +7,43 @@
 
 ## Purpose
 
-PSI-09-vRAG is an independent experimental engine that implements GraphRAG architecture. It replaces traditional prompt-based context with a structured pipeline: knowledge graph assembly → DSPy signature reasoning → LangGraph state machine → structured output.
+PSI-09-vRAG is the **frontier experimental branch** of the PSI-09 ecosystem. It is the primary research vehicle for advancing conversation engine architecture beyond flat prompt injection.
 
-It operates without operational constraints tied to the main engine.
+It replaces traditional prompt-based context with a structured pipeline: knowledge graph assembly → DSPy signature reasoning → LangGraph state machine → structured output.
+
+It operates without operational constraints tied to the production engine.
+
+---
+
+## Frontier Model Highlights
+
+### What Makes vRAG Distinct
+
+| Aspect | Production Engine | vRAG (Frontier) |
+|--------|------------------|-----------------|
+| Context | Token-trimmed text dump | NetworkX knowledge graph with PageRank |
+| Pipeline | Flat prompt injection | DSPy modular 4-stage signature chain |
+| Orchestration | Sequential function calls | LangGraph state machine |
+| Gatekeeper | Hard-coded: pinged → reply | LLM triage: context-aware engagement decision |
+| Output | `{"reply": "string"}` | `{"reply": "string", "reaction": "emoji\|null"}` |
+| Schema | None | Pydantic BaseModel validation |
+| Temporal model | None | Exponential decay (0.9^days) |
+| Social scoring | None | PageRank + community detection |
+
+### Dedicated Bridge
+
+Because vRAG's `DecisionSignature` can output `REACTION_ONLY`, `TEXT_ONLY`, or `BOTH` response methods, the standard Discord bridge (which only handles `reply`) cannot fully utilize it. The [psi-09-discord-experimental](https://github.com/sudoboneman/psi-09-discord-experimental) bridge was written specifically to handle vRAG's richer output:
+
+```python
+response_data = await send_to_backend(payload)
+reply_text = response_data.get("reply", "")
+reaction_emoji = response_data.get("reaction")
+
+if reaction_emoji:
+    await message.add_reaction(reaction_emoji)
+if reply_text:
+    await message.reply(reply_text)
+```
 
 ---
 
@@ -331,8 +365,12 @@ PSI-09-vRAG/
 
 ## Related
 
-- [psi-09-roastbot](https://github.com/sudoboneman/psi-09-roastbot) — Production engine (independent)
-- [psi-09-discord](https://github.com/sudoboneman/psi-09-discord) — Discord bridge
+### Frontier Branch Components
+- [psi-09-discord-experimental](https://github.com/sudoboneman/psi-09-discord-experimental) — **Dedicated bridge** for vRAG (handles `reaction` + `reply`)
+
+### Production Branch (Independent)
+- [psi-09-roastbot](https://github.com/sudoboneman/psi-09-roastbot) — Production engine
+- [psi-09-discord](https://github.com/sudoboneman/psi-09-discord) — Discord bridge (standard)
 - [psi-09-whatsapp](https://github.com/sudoboneman/psi-09-whatsapp) — WhatsApp bridge
 - [psi-09-mc](https://github.com/sudoboneman/psi-09-mc) — Minecraft 6b6t bot
 - [psi-09-mc-gapples](https://github.com/sudoboneman/psi-09-mc-gapples) — Minecraft gapples bot
