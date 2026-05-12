@@ -379,6 +379,40 @@ PSI-09-vRAG/
 
 ---
 
+## Deployment
+
+Deployment is identical to [psi-09-roastbot](https://github.com/sudoboneman/psi-09-roastbot). Choose one of:
+
+### Option A: Hugging Face Spaces
+
+1. Create a Hugging Face Space with Docker/Python 3.10
+2. Set `HF_TOKEN` as a Space secret
+3. Set environment variables:
+   - `MONGO_URI`
+   - `NVIDIA_API_KEY_1`, `NVIDIA_API_KEY_2`
+   - `GROQ_API_KEY_2`, `GROQ_API_KEY_3`
+   - `DISCORD_ID`, `DISCORD_ID_2`
+4. Deploy from the `main` branch
+
+### Option B: Docker
+
+```bash
+docker build -t psi-09-vrag .
+docker run -e MONGO_URI=... -e NVIDIA_API_KEY_1=... -e NVIDIA_API_KEY_2=... -e GROQ_API_KEY_2=... -e GROQ_API_KEY_3=... -p 7860:7860 psi-09-vrag
+```
+
+### Option C: Bare Metal
+
+```bash
+pip install -r requirements.txt
+# Set all env vars (MONGO_URI, NVIDIA_API_KEY_*, GROQ_API_KEY_*, DISCORD_ID, DISCORD_ID_2)
+python main.py  # runs on port 7860
+```
+
+**Note:** Requires a MongoDB Atlas cluster for graph storage.
+
+---
+
 **Status:** Active, experimental development  
 **Origin:** 2025  
 **Author:** sudoboneman
